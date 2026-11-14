@@ -6455,7 +6455,9 @@ const (
 
 // notVideoDecodeFailuresV3 lists the failure classifications that say a copy
 // route failed for a reason other than the video decoder: the network, the
-// source, the audio renderer, or a subtitle route. They do not mark the copy as
+// source or the server refusing it, the audio renderer, a subtitle route, or a
+// change the viewer made (a recovery classified as one reaches the mark only
+// when it changed nothing, as a repeated report). They do not mark the copy as
 // failed; an audio failure recovers on a copy with the audio converted to AAC,
 // not on a video transcode. Any other classification does, because a wrong
 // mark costs a transcode, which plays, while a missed one leaves a strict
@@ -6474,6 +6476,11 @@ var notVideoDecodeFailuresV3 = map[string]bool{
 	"source_unavailable":                         true,
 	"seek_reanchor_network_failure":              true,
 	failureAudioRendererV3:                       true,
+	"sourceRefused":                              true,
+	"quality_changed":                            true,
+	"audio_track_changed":                        true,
+	failureSubtitleTrackChangedV3:                true,
+	"output_route_changed":                       true,
 }
 
 // withoutFailedSubtitleRoutesV3 removes the subtitle routes this attempt may

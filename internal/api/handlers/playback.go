@@ -616,7 +616,7 @@ func (h *PlaybackHandler) loadTranscodeServeSession(r *http.Request, sessionID s
 				return session, playback.SessionLoaded, nil, nil, nil
 			}
 			if card != nil {
-				if videoCopyReconstructRefused(r.Context(), h.fileResolver, h.CopySafetyRacer, card) {
+				if videoCopyReconstructRefused(r.Context(), h.fileResolver, h.CopySafetyRacer, h.PlanStoreV3, card) {
 					return nil, playback.SessionMissing, nil, nil, nil
 				}
 				session, _, status, reconstructErr := h.tm.LoadOrReconstructTranscodeWithError(r.Context(), h.sessionMgr.GetSession, sessionID, requestUserID, requestedSegment, card)
@@ -653,7 +653,7 @@ func (h *PlaybackHandler) loadTranscodeServeSession(r *http.Request, sessionID s
 	// miss it entirely. A revival the verdict does not condemn re-engages the
 	// race here, so the session about to be rebuilt is covered by a race this
 	// replica owns. See playback_copy_safety.go.
-	if videoCopyReconstructRefused(r.Context(), h.fileResolver, h.CopySafetyRacer, card) {
+	if videoCopyReconstructRefused(r.Context(), h.fileResolver, h.CopySafetyRacer, h.PlanStoreV3, card) {
 		return nil, playback.SessionMissing, nil, nil, nil
 	}
 	// A tone-mapped or keyframe-planned rebuild can fail for a reason the

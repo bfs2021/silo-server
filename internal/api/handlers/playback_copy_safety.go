@@ -31,9 +31,15 @@ import (
 // would let exactly the remote remux keep streaming.
 //
 // The refusal is a plain not-found, matching an expired or missing recipe,
-// because that is the failure a client's recovery already knows how to handle
-// — it mints a fresh attempt, which plans against the persisted verdict and
-// lands on a transcode.
+// because that is the failure a client's recovery already knows how to handle.
+//
+// A protocol-v3 attempt is the exception. Its planner offers the copy of a
+// copy-unsafe source on purpose and refuses it only once a copy has failed on
+// the client (playback.AttemptKeepsVideoCopyV3), so a rebuild of an attempt
+// whose copy has not failed is allowed: refusing it would end a copy the
+// client plays, and the fresh attempt would be offered the same copy again.
+// The attempt is read only when the verdict would refuse, so an ordinary
+// revival costs no extra lookup.
 //
 // The gate is only half the answer, because the row is only half the state. A
 // verdict is reached on one replica and may not be on the row at all: the write
@@ -57,25 +63,35 @@ import (
 //
 // A missing racer (tests, minimal setups) collapses this to the row check plus
 // no race, which is the pre-optimistic behavior.
-func videoCopyRevivalRefused(ctx context.Context, racer PlaybackCopySafetyRacer, file *models.MediaFile, sessionID string) bool {
+func videoCopyRevivalRefused(ctx context.Context, racer PlaybackCopySafetyRacer, attempts playback.PlanStoreV3, file *models.MediaFile, sessionID string) bool {
 	if file == nil {
 		return false
 	}
 	if multi, known := file.PersistedVideoCopyVerdict(); known {
-		if multi {
-			logVideoCopyRevivalRefusal(ctx, file, sessionID)
-		}
-		return multi
+		return multi && refuseUnsafeRevival(ctx, attempts, file, sessionID)
 	}
 	if racer == nil {
 		return false
 	}
 	if racer.VideoCopyUnsafeKnown(ctx, file) {
-		logVideoCopyRevivalRefusal(ctx, file, sessionID)
-		return true
+		return refuseUnsafeRevival(ctx, attempts, file, sessionID)
 	}
 	racer.RaceScan(file.ID)
 	return false
+}
+
+// refuseUnsafeRevival decides the revival of a copy whose source is known to
+// be copy-unsafe. It is served when the session's v3 attempt has not recorded
+// a failed copy; a session without one (a Jellyfin-protocol session) or with an
+// unreadable record is refused.
+func refuseUnsafeRevival(ctx context.Context, attempts playback.PlanStoreV3, file *models.MediaFile, sessionID string) bool {
+	if attempts != nil && sessionID != "" {
+		if record, err := attempts.GetAttempt(ctx, sessionID); err == nil && playback.AttemptKeepsVideoCopyV3(record) {
+			return false
+		}
+	}
+	logVideoCopyRevivalRefusal(ctx, file, sessionID)
+	return true
 }
 
 // videoCopyReconstructRefused reports whether rebuilding a lost transport from
@@ -87,7 +103,7 @@ func videoCopyRevivalRefused(ctx context.Context, racer PlaybackCopySafetyRacer,
 // verdict is re-checked on every request, so a database blip costs a later
 // refusal rather than a spurious one. The same applies to a handler with no
 // file resolver wired (optional on PlaybackHandler).
-func videoCopyReconstructRefused(ctx context.Context, files FilePathResolver, racer PlaybackCopySafetyRacer, card *playback.RecipeCard) bool {
+func videoCopyReconstructRefused(ctx context.Context, files FilePathResolver, racer PlaybackCopySafetyRacer, attempts playback.PlanStoreV3, card *playback.RecipeCard) bool {
 	if card == nil || files == nil || card.MediaFileID <= 0 || !card.VideoStreamCopy() {
 		return false
 	}
@@ -95,7 +111,7 @@ func videoCopyReconstructRefused(ctx context.Context, files FilePathResolver, ra
 	if err != nil || file == nil {
 		return false
 	}
-	return videoCopyRevivalRefused(ctx, racer, file, card.SessionID)
+	return videoCopyRevivalRefused(ctx, racer, attempts, file, card.SessionID)
 }
 
 // reconstructTransportForServe rebuilds a lost local transport from the token

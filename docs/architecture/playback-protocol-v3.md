@@ -1305,8 +1305,8 @@ alone does not stop the clock), or a `rejected` result, and the session is
 terminated instead. That is deliberate, and it is the whole
 backwards-compatibility story: a client shipped before this token sees its
 session end, runs the recovery it already has, and its fresh attempt re-plans
-the route (a multi-PPS source is still offered the copy first; see below). No client has to
-implement anything to stay correct; the feature only buys a seamless switch
+the route (a multi-PPS source is still offered the copy first; see below). No
+client has to implement anything to stay correct; the feature only buys a seamless switch
 instead of a stopped session.
 
 An inconclusive scan changes nothing: nothing is persisted, no command is
@@ -1314,7 +1314,7 @@ pushed, and live sessions keep the route they were given. Only a positive
 "this source cannot be copied" verdict withdraws a plan, and from a v3 attempt
 only once a copy has failed on the client (see the copy-first rule below).
 
-Three scoping rules keep the stop from firing where it cannot help:
+These scoping rules keep the stop from firing where it cannot help:
 
 - **The verdict is about the effective file.** A session whose *requested*
   edition turned out to be copy-unsafe, but which is streaming a different
@@ -1334,20 +1334,22 @@ Three scoping rules keep the stop from firing where it cannot help:
 - **A multi-PPS source is copied first, for every client.** Decoders that
   apply in-band parameter sets (Media3) play the copy; ones that trust only the
   sample entry's (VideoToolbox, browser MSE) fail it. A `failure_recovery` or
-  `seek_failure_recovery` replan of a copy plan, unless blamed on a node, a
-  proxy origin, the network, the audio renderer or a subtitle route, marks the
-  attempt `VideoCopyFailed` in its frozen recipe, and
-  the planner then offers the attempt's copy-unsafe source no remux copy. The
+  `seek_failure_recovery` replan of a copy plan marks the attempt
+  `VideoCopyFailed` in its frozen recipe, unless the failure is blamed on a
+  node, a proxy origin, the network, the source or the server refusing it, the
+  audio renderer, a subtitle route, or a viewer's change that changed nothing.
+  The planner then offers the attempt's copy-unsafe source no remux copy. The
   mark does not gate direct play: once a quality or track change clears the
   attempted keys, `original_http` may be tried again, and a transcode follows
-  only if it is not playable. Until then the
-  notifier leaves a v3 attempt's copy alone. A strict decoder costs up to two
-  failed routes (direct play, then the copy); a silent mis-decode is not caught.
+  only if it is not playable. Until the mark is set, the notifier leaves a v3
+  attempt's copy alone, and a rebuild of that copy after a node or replica loss
+  is served (see below). A strict decoder costs up to two failed routes (direct
+  play, then the copy); a silent mis-decode is not caught.
 
 That persisted verdict is read from the `media_files` row on every path that
 plans a route — start, replan, and the v2 resolver — not only from the probe
-ensurer's in-memory stamp. A replan that did not see it would simply walk from
-one stream-copy delivery to the other.
+ensurer's in-memory stamp. A replan of a marked attempt that did not see it
+would walk from one stream-copy delivery to the other.
 
 Delivery is in-process: the replica that owns the session owns its realtime
 connection, so a verdict resolved on one node acts on the sessions that node is
@@ -1361,10 +1363,13 @@ session, so it rebuilds one from the recipe card — which would replay the exac
 remux the verdict condemned. The serve routes therefore re-read the persisted
 verdict for a video stream-copy recipe (a progressive remux, or an HLS transport
 whose video target is `copy`) and refuse with the ordinary playback-session
-not-found when the row says the source is unsafe. The client's existing recovery
-mints a fresh attempt, which re-plans the route: the copy is offered first
-again, and a transcode follows only if that copy fails. Transcode reconstruction is untouched: re-encoding the bitstream is
-unaffected by conflicting parameter sets.
+not-found when the row says the source is unsafe. A session whose v3 attempt has
+not recorded a failed copy is the exception: the planner still offers that
+attempt the copy, so its rebuild is served rather than ending a stream the
+client plays. The attempt is read only when the verdict would refuse. After a
+refusal, the client's existing recovery re-plans the route, and a v3 attempt
+whose copy failed lands on a transcode. Transcode reconstruction is untouched:
+re-encoding the bitstream is unaffected by conflicting parameter sets.
 
 On the HLS routes the check runs *before* the session is rebuilt, not before the
 transport is. Rebuilding registers the playback session against the user's

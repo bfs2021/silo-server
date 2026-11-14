@@ -210,7 +210,7 @@ func (h *PlaybackHandler) moveTranscodeOffNodeV3(
 	}
 	// Moving a stream-copy recipe revives it on a new executor, so it answers
 	// to the same persisted copy-safety verdict as any other revival.
-	if videoCopyReconstructRefused(ctx, h.fileResolver, h.CopySafetyRacer, card) {
+	if videoCopyReconstructRefused(ctx, h.fileResolver, h.CopySafetyRacer, h.PlanStoreV3, card) {
 		return errRehomeCopyUnsafe
 	}
 

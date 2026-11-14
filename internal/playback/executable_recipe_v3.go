@@ -237,6 +237,15 @@ func PlanCopiesVideoV3(plan PlanV3) bool {
 	return plan.Delivery == DeliveryRemuxHLSV3 || plan.Delivery == DeliveryRemuxProgressiveV3
 }
 
+// AttemptKeepsVideoCopyV3 reports whether a v3 attempt still accepts a video
+// stream-copy of a copy-unsafe source. The planner offers that copy on purpose
+// and refuses it only once a copy has failed on the client, so the verdict
+// alone does not condemn the attempt's copy: not mid-play, and not when its
+// transport is rebuilt.
+func AttemptKeepsVideoCopyV3(record *AttemptRecordV3) bool {
+	return record != nil && record.CurrentPlan.Delivery != "" && !record.FrozenRecipe.VideoCopyFailed
+}
+
 // PlannerResult restores a planner result from the frozen executable recipe.
 func (r ExecutableRecipeV3) PlannerResult(plan *PlanV3) PlannerResultV3 {
 	return PlannerResultV3{

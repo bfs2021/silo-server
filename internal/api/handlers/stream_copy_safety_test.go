@@ -7,6 +7,7 @@ import (
 	"net/http/httptest"
 	"os"
 	"path/filepath"
+	"strings"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -295,6 +296,58 @@ func TestHandleTranscodeServe_RefusesRevivingACopyUnsafeHLSRecipe(t *testing.T) 
 	}
 }
 
+// A protocol-v3 attempt is offered the copy of a multi-PPS source until a copy
+// fails on the client, so the persisted verdict alone must not refuse the
+// rebuild of that copy when its node dies or another replica answers: the
+// client was playing it, and a fresh attempt would get the same copy again.
+// Once the attempt has recorded a failed copy, the revival is refused as before.
+func TestHandleTranscodeServe_RevivesTheCopyOfAnAttemptWhoseCopyHasNotFailed(t *testing.T) {
+	const secret = "test-stream-signing-secret"
+	var nodeHits atomic.Int64
+	node := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		nodeHits.Add(1)
+		w.WriteHeader(http.StatusOK)
+	}))
+	defer node.Close()
+
+	for _, tc := range []struct {
+		name        string
+		copyFailed  bool
+		wantRevived bool
+	}{
+		{name: "copy not failed", wantRevived: true},
+		{name: "copy failed", copyFailed: true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			nodeHits.Store(0)
+			unsafe := true
+			file := copySafetyStreamFile(t, &unsafe)
+			handler := NewPlaybackHandler(playback.NewSessionManager(0, 0), testPlaybackFileResolver{file: file})
+			handler.JWTSecret = secret
+			sessionID := "v3-copy-" + strings.ReplaceAll(tc.name, " ", "-")
+			record := playback.AttemptRecordV3{
+				PlaybackAttemptID: "attempt-" + sessionID, SessionID: sessionID, UserID: 1, ProfileID: "profile-1",
+				RequestedMediaFileID: file.ID, EffectiveMediaFileID: file.ID, ExpiresAt: time.Now().Add(time.Hour),
+				CurrentPlan: playback.PlanV3{Delivery: playback.DeliveryRemuxHLSV3},
+			}
+			record.FrozenRecipe.VideoCopyFailed = tc.copyFailed
+			if err := handler.PlanStoreV3.SaveAttempt(t.Context(), record); err != nil {
+				t.Fatal(err)
+			}
+
+			rr := httptest.NewRecorder()
+			handler.HandleGetTranscodeManifest(rr, copySafetyHLSRequest(t, secret, "", copySafetyHLSCard(sessionID, file.ID, node.URL)))
+
+			if revived := nodeHits.Load() > 0; revived != tc.wantRevived {
+				t.Fatalf("revived = %v (status %d, body %s), want %v", revived, rr.Code, rr.Body.String(), tc.wantRevived)
+			}
+			if !tc.wantRevived && rr.Code != http.StatusNotFound {
+				t.Fatalf("status = %d, want the revival refused as not-found", rr.Code)
+			}
+		})
+	}
+}
+
 // The HLS revival path needs the same two halves as the progressive one: an
 // undecided recipe is revived and raced here, and one this replica already
 // knows is unsafe — from a verdict whose write never landed — is refused even
@@ -372,7 +425,7 @@ func TestVideoCopyReconstructRefusedOnlyGatesCopyDeliveries(t *testing.T) {
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			card := tc.card
-			if got := videoCopyReconstructRefused(t.Context(), files, nil, &card); got != tc.want {
+			if got := videoCopyReconstructRefused(t.Context(), files, nil, nil, &card); got != tc.want {
 				t.Fatalf("videoCopyReconstructRefused() = %v, want %v", got, tc.want)
 			}
 		})

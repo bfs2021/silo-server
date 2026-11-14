@@ -199,10 +199,7 @@ func (n *CopySafetyNotifier) consider(ctx context.Context, session *Session, fil
 	if !sessionOnVideoCopyRouteV3(session, record) {
 		return copySafetyUnresolved
 	}
-	if record != nil && record.CurrentPlan.Delivery != "" && !record.FrozenRecipe.VideoCopyFailed {
-		// A v3 attempt is offered the copy of a multi-PPS source on purpose and
-		// leaves it only when the copy fails on the client (see
-		// StartRequestV3.VideoCopyFailed); the verdict alone does not condemn it.
+	if AttemptKeepsVideoCopyV3(record) {
 		return copySafetyDisposed
 	}
 	if session.IsJellyfinCompat {
@@ -431,12 +428,7 @@ func sessionOnVideoCopyRouteV3(session *Session, record *AttemptRecordV3) bool {
 		return false
 	}
 	if record != nil && record.CurrentPlan.Delivery != "" {
-		switch record.CurrentPlan.Delivery {
-		case DeliveryRemuxHLSV3, DeliveryRemuxProgressiveV3:
-			return true
-		default:
-			return false
-		}
+		return PlanCopiesVideoV3(record.CurrentPlan)
 	}
 	method := session.BasePlayMethod
 	if method == "" {

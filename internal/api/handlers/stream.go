@@ -232,7 +232,7 @@ func (h *StreamHandler) HandleStream(w http.ResponseWriter, r *http.Request) {
 	// verdict fast enough to stop the session first leaves WatchTransportStop
 	// with no session to watch, and it reports the stop it missed.
 	if reconstructed && session.PlayMethod == playback.PlayRemux &&
-		videoCopyRevivalRefused(r.Context(), h.CopySafetyRacer, file, sessionID) {
+		videoCopyRevivalRefused(r.Context(), h.CopySafetyRacer, h.PlanStoreV3, file, sessionID) {
 		// The reconstruct already registered the session; tear it down again so
 		// the refusal leaves no half-live session behind the client's replan.
 		h.abortPlaybackSession(r.Context(), session)
