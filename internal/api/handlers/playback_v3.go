@@ -5939,6 +5939,15 @@ func (h *PlaybackHandler) executeReplanV3(r *http.Request, record *playback.Atte
 		// decoder's. It goes on the durable recipe now because a terminal or
 		// transport error persists this record unchanged.
 		if !proxyOriginRecovery && !nodeRecovery && !notVideoDecodeFailuresV3[req.Failure.Classification] && playback.PlanCopiesVideoV3(record.CurrentPlan) {
+			if !record.FrozenRecipe.VideoCopyFailed {
+				slog.InfoContext(r.Context(), "a video stream-copy failed on the client; the attempt gets no further copy of a copy-unsafe source",
+					"component", "api",
+					"session_id", record.SessionID,
+					"file_id", record.EffectiveMediaFileID,
+					"delivery", record.CurrentPlan.Delivery,
+					"classification", req.Failure.Classification,
+				)
+			}
 			record.FrozenRecipe.VideoCopyFailed = true
 		}
 		// Always exclude the durable server recipe so stale or malformed client
@@ -6528,6 +6537,7 @@ var notVideoDecodeFailuresV3 = map[string]bool{
 	"source_unavailable":                         true,
 	"seek_reanchor_network_failure":              true,
 	failureAudioRendererV3:                       true,
+	"browser_engine_audio_decode_failed":         true,
 	"sourceRefused":                              true,
 	"quality_changed":                            true,
 	"audio_track_changed":                        true,

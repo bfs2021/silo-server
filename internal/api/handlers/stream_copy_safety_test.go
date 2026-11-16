@@ -322,7 +322,7 @@ func TestHandleTranscodeServe_RevivesTheCopyOfAnAttemptWhoseCopyHasNotFailed(t *
 			nodeHits.Store(0)
 			unsafe := true
 			file := copySafetyStreamFile(t, &unsafe)
-			handler := NewPlaybackHandler(playback.NewSessionManager(0, 0), testPlaybackFileResolver{file: file})
+			handler := newKeyedPlaybackHandler(playback.NewSessionManager(0, 0), testPlaybackFileResolver{file: file})
 			handler.JWTSecret = secret
 			sessionID := "v3-copy-" + strings.ReplaceAll(tc.name, " ", "-")
 			record := playback.AttemptRecordV3{

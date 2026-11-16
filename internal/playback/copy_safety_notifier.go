@@ -177,9 +177,8 @@ func (n *CopySafetyNotifier) sweepLateSessionsAfter(ctx context.Context, fileID 
 			if _, handled := seen[session.ID]; handled {
 				continue
 			}
-			// The settle window has already elapsed since the verdict; a session
-			// still younger than that was planned after the verdict persisted and
-			// should never have been given a copy route at all.
+			// The settle window has already elapsed since the verdict, so a
+			// session still younger than that gets no second postponement.
 			n.consider(ctx, session, fileID, false)
 		}
 	}()
@@ -192,7 +191,14 @@ func (n *CopySafetyNotifier) consider(ctx context.Context, session *Session, fil
 	if session == nil || session.ID == "" {
 		return copySafetyUnresolved
 	}
-	record := n.attempt(ctx, session.ID)
+	record, readable := n.attempt(ctx, session.ID)
+	if !readable {
+		// An attempt that could not be read may be a v3 copy the planner handed
+		// out on purpose. Stopping it on a plan-store blip would end a stream
+		// that is playing, so it stays eligible for the sweep and is otherwise
+		// left alone.
+		return copySafetyUnresolved
+	}
 	if !sessionServesFileV3(session, record, fileID) {
 		return copySafetyUnresolved
 	}
@@ -301,23 +307,23 @@ func (n *CopySafetyNotifier) tellablePlanID(session *Session, record *AttemptRec
 	return planID, true
 }
 
-func (n *CopySafetyNotifier) attempt(ctx context.Context, sessionID string) *AttemptRecordV3 {
+// attempt returns the session's v3 attempt, or nil when it has none. readable
+// is false only when the plan store failed, which says nothing about whether
+// the session has an attempt.
+func (n *CopySafetyNotifier) attempt(ctx context.Context, sessionID string) (record *AttemptRecordV3, readable bool) {
 	if n.attempts == nil {
-		return nil
+		return nil, true
 	}
 	record, err := n.attempts.GetAttempt(ctx, sessionID)
 	if err != nil {
-		if !errors.Is(err, ErrSessionNotFound) {
-			// A session with no attempt and a session whose attempt could not be
-			// read lead to the same fallback, so the failure has to be visible:
-			// otherwise a plan-store outage looks exactly like a fleet of
-			// unnegotiated clients in the logs.
-			slog.WarnContext(ctx, "could not read the playback attempt for a copy-unsafe session",
-				"component", "playback", "session_id", sessionID, "error", err)
+		if errors.Is(err, ErrSessionNotFound) {
+			return nil, true
 		}
-		return nil
+		slog.WarnContext(ctx, "could not read the playback attempt for a copy-unsafe session",
+			"component", "playback", "session_id", sessionID, "error", err)
+		return nil, false
 	}
-	return record
+	return record, true
 }
 
 func (n *CopySafetyNotifier) invalidate(ctx context.Context, session *Session, record *AttemptRecordV3, fileID int) {

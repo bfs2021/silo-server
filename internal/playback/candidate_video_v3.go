@@ -202,8 +202,8 @@ func (p *candidatePlannerV3) routeFacts(evidenceInsufficient bool) {
 	// offered a video stream-copy first. Every copy keeps every in-band PPS,
 	// so a decoder that applies them plays it (Media3 does); a decoder that
 	// trusts only the sample entry's parameter sets fails, the client's
-	// failure_recovery replan reports it, and from then on the attempt skips
-	// the remux routes and lands on a transcode.
+	// failure_recovery or seek_failure_recovery replan reports it, and from
+	// then on the attempt skips the remux routes and lands on a transcode.
 	f.remuxActive = !f.mustAdapt && (!source.VideoCopyUnsafe || !in.Request.VideoCopyFailed) && (remuxRangeOK || f.stripProgressive || f.stripHLS) &&
 		(f.remuxSubtitleOK || f.hlsSubtitleOK)
 	if f.remuxActive {

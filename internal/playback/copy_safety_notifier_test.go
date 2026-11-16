@@ -3,6 +3,7 @@ package playback
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"sync"
 	"testing"
 	"time"
@@ -58,11 +59,16 @@ func (c *fakeCopySafetyControl) trackedCommands() []playbackCommandNote {
 type fakeAttemptLookup struct {
 	mu      sync.Mutex
 	records map[string]*AttemptRecordV3
+	// err, when set, fails every read the way a plan-store outage would.
+	err error
 }
 
 func (l *fakeAttemptLookup) GetAttempt(_ context.Context, sessionID string) (*AttemptRecordV3, error) {
 	l.mu.Lock()
 	defer l.mu.Unlock()
+	if l.err != nil {
+		return nil, l.err
+	}
 	record, ok := l.records[sessionID]
 	if !ok {
 		return nil, ErrSessionNotFound
@@ -263,6 +269,22 @@ func TestCopySafetyNotifierLeavesV3CopiesThatHaveNotFailed(t *testing.T) {
 	stopped := control.stoppedSessions()
 	if len(stopped) != 1 || stopped[0] != failed.ID {
 		t.Fatalf("stopped = %v, want only the session whose copy already failed (%q)", stopped, failed.ID)
+	}
+}
+
+// A plan-store failure says nothing about the attempt. The session may be a v3
+// copy the planner handed out on purpose, so it must not be stopped.
+func TestCopySafetyNotifierLeavesSessionsWhoseAttemptCannotBeRead(t *testing.T) {
+	sessions, hub, tracker, control := newCopySafetyFixture(t)
+	startPlaybackTestSession(t, sessions, 1, "profile-1", 100, PlayRemux)
+
+	attempts := &fakeAttemptLookup{err: errors.New("plan store unavailable")}
+	notifier := NewCopySafetyNotifier(sessions, attempts, NewCommandDispatcher(sessions, hub, tracker), control)
+	notifier.settle = 0
+	notifier.VideoCopyUnsafe(context.Background(), 100)
+
+	if stopped := control.stoppedSessions(); len(stopped) != 0 {
+		t.Fatalf("stopped = %v, want no session stopped on an unreadable attempt", stopped)
 	}
 }
 

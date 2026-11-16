@@ -2,6 +2,7 @@ package handlers
 
 import (
 	"context"
+	"errors"
 	"log/slog"
 
 	"github.com/Silo-Server/silo-server/internal/models"
@@ -82,11 +83,21 @@ func videoCopyRevivalRefused(ctx context.Context, racer PlaybackCopySafetyRacer,
 
 // refuseUnsafeRevival decides the revival of a copy whose source is known to
 // be copy-unsafe. It is served when the session's v3 attempt has not recorded
-// a failed copy; a session without one (a Jellyfin-protocol session) or with an
-// unreadable record is refused.
+// a failed copy, and refused when it has, or when the session has no attempt (a
+// Jellyfin-protocol session). An unreadable record does not refuse: the copy is
+// the route the planner offers first, and a plan-store blip must not end one
+// that is playing.
 func refuseUnsafeRevival(ctx context.Context, attempts playback.PlanStoreV3, file *models.MediaFile, sessionID string) bool {
 	if attempts != nil && sessionID != "" {
-		if record, err := attempts.GetAttempt(ctx, sessionID); err == nil && playback.AttemptKeepsVideoCopyV3(record) {
+		record, err := attempts.GetAttempt(ctx, sessionID)
+		switch {
+		case err == nil:
+			if playback.AttemptKeepsVideoCopyV3(record) {
+				return false
+			}
+		case !errors.Is(err, playback.ErrSessionNotFound):
+			slog.WarnContext(ctx, "could not read the playback attempt for a copy-unsafe revival",
+				"component", "api", "session_id", sessionID, "file_id", file.ID, "error", err)
 			return false
 		}
 	}
