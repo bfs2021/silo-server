@@ -175,6 +175,10 @@ func NewRouter(deps Dependencies) chi.Router {
 	}
 	playbackHandler.NodePlanner = deps.NodePlanner
 	playbackHandler.JWTSecret = deps.JWTSecret
+	playbackHandler.NodeKeys = deps.NodeKeys
+	if deps.SourceGrants != nil {
+		playbackHandler.SourceGrants = deps.SourceGrants
+	}
 	// Compat transcode reconstruct is driven by the recipe carried in the durable
 	// compat playback store (jellycompat_playback_sessions); no separate native
 	// recipe table is needed.
@@ -193,6 +197,7 @@ func NewRouter(deps Dependencies) chi.Router {
 	playbackHandler.SettingsRepo = deps.SettingsRepo
 	playbackHandler.ratings = shownRatings
 	playbackHandler.RecipeNodeStore = deps.RecipeNodeStore
+	playbackHandler.StreamDeny = deps.StreamDeny
 	itemsHandler.themeRouter = compatThemeRouter(deps, playbackHandler)
 	itemsHandler.themeFFmpegPath = func() string { return playback.ResolveFFmpegPath(playbackHandler.FFmpegPath) }
 	playbackHandler.SessionSyncer = deps.SessionSyncer
@@ -203,6 +208,8 @@ func NewRouter(deps Dependencies) chi.Router {
 	if deps.KeptSubtitles != nil {
 		playbackHandler.SubtitleCache.SetEmbeddedSource(deps.KeptSubtitles)
 	}
+	playbackHandler.AudioPreferences = deps.AudioPreferences
+	playbackHandler.SubtitlePreferences = deps.SubtitlePreferences
 	if subtitleRepo != nil {
 		playbackHandler.SubtitleRepo = subtitleRepo
 		playbackHandler.SubtitleBlobs = deps.SubtitleBlobs

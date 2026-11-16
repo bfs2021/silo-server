@@ -3446,6 +3446,23 @@ export interface paths {
     patch?: never;
     trace?: never;
   };
+  "/api/v2/admin/nodes/{id}/key": {
+    parameters: {
+      query?: never;
+      header?: never;
+      path?: never;
+      cookie?: never;
+    };
+    get?: never;
+    put?: never;
+    /** Issue a new key for a transcode node and return it once. Each call rotates: the previous key stops working on this server at once and on other servers and proxies within seconds. The node's running streams fail until it restarts with the new key; drain the node first to avoid that. A disabled node can take a key. Never replay an uncertain issue; issue again instead. */
+    post: operations["issueAdminNodeKey"];
+    delete?: never;
+    options?: never;
+    head?: never;
+    patch?: never;
+    trace?: never;
+  };
   "/api/v2/admin/nodes/{id}/reprobe": {
     parameters: {
       query?: never;
@@ -7443,7 +7460,7 @@ export interface paths {
       path?: never;
       cookie?: never;
     };
-    /** Search people by name, with exact matches first and optional media scope. */
+    /** Search people by name, with exact matches first, then the most credited for a specific query, and optional media scope. */
     get: operations["listPeople"];
     put?: never;
     post?: never;
@@ -12361,7 +12378,7 @@ export interface paths {
     put?: never;
     /**
      * Submit a bounded subtitle multipart form.
-     * @description Detect a subtitle language from filename, metadata or content with an optional manual fallback. Does not store the file.
+     * @description Detect a subtitle language from filename, metadata or content with an optional manual fallback. Does not store the file. A server runs at most 4 detections at once and an account may run two of them; beyond either limit the request gets 429 with Retry-After.
      */
     post: operations["detectSubtitleLanguage"];
     delete?: never;
@@ -16378,6 +16395,7 @@ export interface components {
        * @enum {string}
        */
       state: "available" | "disabled" | "not_configured" | "unsupported";
+      streams_by_method: boolean;
       timeseries: boolean;
       top_activity: boolean;
       watch_providers: boolean;
@@ -16505,6 +16523,14 @@ export interface components {
       total_users: number;
       watch_providers: components["schemas"]["AdminDashboardWatchProviderStats"][];
     };
+    AdminDashboardStreamsByMethod: {
+      /** Format: int64 */
+      direct: number;
+      /** Format: int64 */
+      remux: number;
+      /** Format: int64 */
+      transcode: number;
+    };
     AdminDashboardTimeseries: {
       /** Format: int64 */
       download_egress_bytes: number;
@@ -16546,6 +16572,8 @@ export interface components {
       remux: number;
       /** Format: int64 */
       streams: number;
+      /** @description streams split by play method, from the bucket's peak-streams minute, so the parts add up to no more than streams and can be stacked. direct, remux and transcode on the point are each their own peak and may come from different minutes. Sessions with any other play method are streams minus the sum of these values. */
+      streams_by_method: components["schemas"]["AdminDashboardStreamsByMethod"];
       /**
        * Format: date-time
        * @description RFC 3339 instant in UTC with millisecond precision
@@ -18438,6 +18466,7 @@ export interface components {
       /** @description Null clears the stored date */
       first_air_date?: string | null;
       genres?: string[] | null;
+      /** @description IMDb title ID, stored trimmed and in lowercase; an empty string clears it */
       imdb_id?: string | null;
       /** @description Null clears the stored date */
       last_air_date?: string | null;
@@ -18480,7 +18509,9 @@ export interface components {
       studios?: string[] | null;
       tagline?: string | null;
       title?: string | null;
+      /** @description TMDB ID, stored trimmed and without a TMDB URL slug (550-fight-club saves as 550); an empty string clears it */
       tmdb_id?: string | null;
+      /** @description TheTVDB ID, stored trimmed; an empty string clears it */
       tvdb_id?: string | null;
       /** Format: int64 */
       year?: number | null;
@@ -19022,6 +19053,8 @@ export interface components {
        * @example 1
        */
       id: string;
+      /** @description A key has been issued to this transcode node. The key itself is shown only when it is issued. Always false for a proxy. */
+      key_issued: boolean;
       /**
        * Format: date-time
        * @description RFC 3339 instant in UTC with millisecond precision, or null
@@ -19041,6 +19074,11 @@ export interface components {
       physical_gpu_keys?: string[];
       /** @description Client-facing node address as configured; not validated as a URI */
       public_url?: string;
+      /**
+       * @description How this transcode node reads source media: local through its own library mount, core over HTTP from the API servers. Absent on proxies.
+       * @enum {string}
+       */
+      source_access?: "local" | "core";
       /** @enum {string} */
       type: "proxy" | "transcode";
       /** @description Node address as configured; not validated as a URI */
@@ -19051,8 +19089,12 @@ export interface components {
       allowed: boolean;
       /** @description Transcode nodes can drain: the drain and resume operations, and drain_requested and drain_state on node rows. */
       drain: boolean;
+      /** @description Transcode nodes can be issued their own key: POST /admin/nodes/{id}/key, and key_issued on node rows. */
+      node_keys: boolean;
       /** @description Opaque revision of this document */
       revision: string;
+      /** @description Transcode nodes can read source media through the API servers instead of a library mount: source_access on node rows and in the create and update bodies. */
+      source_access: boolean;
       /**
        * @description Support and configuration state, not health
        * @enum {string}
@@ -19070,6 +19112,11 @@ export interface components {
       name: string;
       /** Format: uri-reference */
       public_url?: string;
+      /**
+       * @description How a transcode node reads source media: local through its own library mount at the API servers' paths, or core over HTTP from the API servers, so the node needs no library mount. Absent means local. A proxy accepts only local. Requires the source_access node capability.
+       * @enum {string}
+       */
+      source_access?: "local" | "core";
       /** @enum {string} */
       type: "proxy" | "transcode";
       /** Format: uri-reference */
@@ -19103,6 +19150,10 @@ export interface components {
       /** @description The URL-fenced persistence call returned successfully; it may have ignored a concurrently repointed node. Not a revision receipt. */
       health_persisted: boolean;
       healthy: boolean;
+    };
+    AdminNodeKey: {
+      /** @description The transcode node's new key, for its SILO_NODE_KEY setting. Shown only in this response; it is never returned again. */
+      node_key: string;
     };
     AdminNodeNetworkAccess: {
       /** @description Overlay DNS name of the node. */
@@ -19268,6 +19319,11 @@ export interface components {
       name?: string;
       /** Format: uri-reference */
       public_url?: string | null;
+      /**
+       * @description How this transcode node reads source media: local or core (see the create body). Applies to jobs the node starts after the change; running jobs keep their mode. A proxy accepts only local. Requires the source_access node capability.
+       * @enum {string}
+       */
+      source_access?: "local" | "core";
       /** Format: uri-reference */
       url?: string;
     };
@@ -19628,6 +19684,8 @@ export interface components {
       workloads: string[];
     };
     AdminPlaybackSession: {
+      /** @description Why the route changes the file instead of playing it as it is, video causes first, from the vocabulary in the capabilities' adaptation_reason_values. Absent for direct play, for a session planned before the server recorded reasons, and for Jellyfin-protocol sessions. Clients ignore values they do not know. */
+      adaptation_reasons?: string[];
       audio_decision?: string;
       /** Format: int64 */
       audio_track_index: number;
@@ -19649,7 +19707,10 @@ export interface components {
       episode_name?: string;
       /** Format: int64 */
       episode_number?: number;
-      /** Format: int64 */
+      /**
+       * Format: int64
+       * @description Length in seconds of what position_seconds is measured against: the file, or the whole book for a multi-file audiobook; null when unknown
+       */
       file_duration: number | null;
       has_playback_control: boolean;
       is_jellyfin_client?: boolean;
@@ -19760,6 +19821,10 @@ export interface components {
       video_decision?: string;
     };
     AdminPlaybackSessionCapabilitiesOutputBody: {
+      /** @description Every adaptation_reasons value this server emits, in the order it reports them. A later server may add values. */
+      adaptation_reason_values: string[];
+      /** @description Rows may carry adaptation_reasons */
+      adaptation_reasons: boolean;
       /** @description Whether the current principal may use the capability */
       allowed: boolean;
       available: boolean;
@@ -23357,8 +23422,27 @@ export interface components {
     };
     AudiobookRelatedItem: {
       content_id: string;
+      /**
+       * Format: int64
+       * @description Audiobooks only: total listening time, summed over the book's files the viewer can play, as the book's own total_duration_seconds is. Absent for ebooks and when no file reports a duration
+       * @example 41520
+       */
+      duration_seconds?: number;
+      /**
+       * @description The profile finished this book, by the rule a catalog card's user_state.played follows: an audiobook's visible progress or a visible completed history row, an ebook's reading progress. Absent when false and without a profile
+       * @example true
+       */
+      played?: boolean;
+      /** @description The poster's ThumbHash, for a blurred preview while poster_url loads */
+      poster_thumbhash?: string;
       /** Format: uri-reference */
       poster_url?: string;
+      /**
+       * Format: double
+       * @description How far the profile is into the book, 0-1: listening position over the progress row's duration for an audiobook, reading progress for an ebook. Present only while the book is started and not played
+       * @example 0.42
+       */
+      progress_ratio?: number;
       /** Format: int64 */
       series_index?: number;
       title: string;
@@ -23755,6 +23839,20 @@ export interface components {
       tmdb_id?: string;
       tvdb_id?: string;
     };
+    CatalogAvailability: {
+      /**
+       * Format: int64
+       * @description Complete seasons, or episodes in the library
+       * @example 2
+       */
+      have: number;
+      /**
+       * Format: int64
+       * @description Seasons that have aired, or known episodes
+       * @example 3
+       */
+      total: number;
+    };
     CatalogBoxSet: {
       backdrop_thumbhash?: string;
       /**
@@ -23954,6 +24052,15 @@ export interface components {
        * @enum {string}
        */
       advisory_source?: "commonsense" | "mdblist";
+      /**
+       * @description On an audiobook or ebook card in a catalog browse listing: up to three author names in credit order, the names the book's detail page lists under authors. Absent for other types, on other listings, and when the book credits no author
+       * @example [
+       *       "Frank Herbert"
+       *     ]
+       */
+      authors?: string[];
+      /** @description On a series, complete seasons out of seasons that have aired. On a season, episodes in the library out of the episodes the season lists. Sent only while the acting profile's poster badges are on and include the availability badge. Absent for other types, for specials, and when episode metadata is incomplete. */
+      availability?: components["schemas"]["CatalogAvailability"];
       /** @description Whether backdrop_url is an episode still. False for series artwork; absent when provenance is unavailable. */
       backdrop_is_episode_still?: boolean;
       backdrop_thumbhash?: string;
@@ -23971,7 +24078,10 @@ export interface components {
       content_id: string;
       /** @example R */
       content_rating?: string;
-      /** Format: double */
+      /**
+       * Format: double
+       * @description The length position_seconds is measured against, in seconds, as the progress record holds it. Present with position_seconds; a card draws its progress bar and time left from the pair
+       */
       duration_seconds?: number;
       /** Format: int64 */
       episode_number?: number;
@@ -24017,7 +24127,7 @@ export interface components {
       play_content_id?: string;
       /**
        * Format: double
-       * @description Resume position on a continue-watching card
+       * @description The profile's resume position, in seconds. On a Continue Watching card, and on a catalog browse or box set card for a title the profile has started and not finished (absent while user_state.played is true); other listings leave it absent. Series, seasons, and ebooks never carry it on a browse card
        */
       position_seconds?: number;
       /** @description Whether poster_url is an episode still. False for series or season artwork; absent when provenance is unavailable. */
@@ -24162,6 +24272,15 @@ export interface components {
       air_time?: string;
       air_timezone?: string;
       audiobook?: components["schemas"]["AudiobookDetailExtension"];
+      /**
+       * @description On an audiobook or ebook card in a catalog browse listing: up to three author names in credit order, the names the book's detail page lists under authors. Absent for other types, on other listings, and when the book credits no author
+       * @example [
+       *       "Frank Herbert"
+       *     ]
+       */
+      authors?: string[];
+      /** @description On a series, complete seasons out of seasons that have aired. On a season, episodes in the library out of the episodes the season lists. Sent only while the acting profile's poster badges are on and include the availability badge. Absent for other types, for specials, and when episode metadata is incomplete. */
+      availability?: components["schemas"]["CatalogAvailability"];
       /** @description Whether backdrop_url is an episode still. False for series artwork; absent when provenance is unavailable. */
       backdrop_is_episode_still?: boolean;
       backdrop_thumbhash?: string;
@@ -24204,7 +24323,10 @@ export interface components {
        * @description Presigned, short-lived. Transparent disc art. Movies only
        */
       disc_url?: string;
-      /** Format: double */
+      /**
+       * Format: double
+       * @description The length position_seconds is measured against, in seconds, as the progress record holds it. Present with position_seconds; a card draws its progress bar and time left from the pair
+       */
       duration_seconds?: number;
       ebook?: components["schemas"]["EbookDetailExtension"];
       /** @description Whether forced subtitles show for this item under the viewer's preferences */
@@ -24284,7 +24406,7 @@ export interface components {
       playback_variants?: components["schemas"]["PlaybackVariant"][];
       /**
        * Format: double
-       * @description Resume position on a continue-watching card
+       * @description The profile's resume position, in seconds. On a Continue Watching card, and on a catalog browse or box set card for a title the profile has started and not finished (absent while user_state.played is true); other listings leave it absent. Series, seasons, and ebooks never carry it on a browse card
        */
       position_seconds?: number;
       /** @description Whether poster_url is an episode still. False for series or season artwork; absent when provenance is unavailable. */
@@ -27435,6 +27557,15 @@ export interface components {
        * @enum {string}
        */
       advisory_source?: "commonsense" | "mdblist";
+      /**
+       * @description On an audiobook or ebook card in a catalog browse listing: up to three author names in credit order, the names the book's detail page lists under authors. Absent for other types, on other listings, and when the book credits no author
+       * @example [
+       *       "Frank Herbert"
+       *     ]
+       */
+      authors?: string[];
+      /** @description On a series, complete seasons out of seasons that have aired. On a season, episodes in the library out of the episodes the season lists. Sent only while the acting profile's poster badges are on and include the availability badge. Absent for other types, for specials, and when episode metadata is incomplete. */
+      availability?: components["schemas"]["CatalogAvailability"];
       /** @description Whether backdrop_url is an episode still. False for series artwork; absent when provenance is unavailable. */
       backdrop_is_episode_still?: boolean;
       backdrop_thumbhash?: string;
@@ -27452,7 +27583,10 @@ export interface components {
       content_id: string;
       /** @example R */
       content_rating?: string;
-      /** Format: double */
+      /**
+       * Format: double
+       * @description The length position_seconds is measured against, in seconds, as the progress record holds it. Present with position_seconds; a card draws its progress bar and time left from the pair
+       */
       duration_seconds?: number;
       /** Format: int64 */
       episode_number?: number;
@@ -27498,7 +27632,7 @@ export interface components {
       play_content_id?: string;
       /**
        * Format: double
-       * @description Resume position on a continue-watching card
+       * @description The profile's resume position, in seconds. On a Continue Watching card, and on a catalog browse or box set card for a title the profile has started and not finished (absent while user_state.played is true); other listings leave it absent. Series, seasons, and ebooks never carry it on a browse card
        */
       position_seconds?: number;
       /** @description Whether poster_url is an episode still. False for series or season artwork; absent when provenance is unavailable. */
@@ -31447,7 +31581,7 @@ export interface components {
       episode_number: number | null;
       /**
        * Format: int64
-       * @description Seconds; null when unknown
+       * @description Length in seconds of what position_seconds is measured against: the file, or the whole book for a multi-file audiobook; null when unknown
        * @example 8520
        */
       file_duration: number | null;
@@ -33694,6 +33828,8 @@ export interface components {
        * @description Calendar date, YYYY-MM-DD
        */
       air_date?: string;
+      /** @description Episodes in the library out of the episodes this season lists. Sent only while the acting profile's poster badges are on and include the availability badge. Absent for specials and when episode metadata is incomplete. */
+      availability?: components["schemas"]["CatalogAvailability"];
       /** @example series:severance-S01 */
       content_id: string;
       /** Format: int64 */
@@ -35674,7 +35810,7 @@ export interface components {
       /** @example Movies */
       library_name: string;
       /**
-       * @description unmatched, pending or ambiguous
+       * @description unmatched, pending or ambiguous. An audiobook without a provider match is unmatched
        * @example unmatched
        */
       status: string;
@@ -36843,6 +36979,15 @@ export interface components {
        * @enum {string}
        */
       advisory_source?: "commonsense" | "mdblist";
+      /**
+       * @description On an audiobook or ebook card in a catalog browse listing: up to three author names in credit order, the names the book's detail page lists under authors. Absent for other types, on other listings, and when the book credits no author
+       * @example [
+       *       "Frank Herbert"
+       *     ]
+       */
+      authors?: string[];
+      /** @description On a series, complete seasons out of seasons that have aired. On a season, episodes in the library out of the episodes the season lists. Sent only while the acting profile's poster badges are on and include the availability badge. Absent for other types, for specials, and when episode metadata is incomplete. */
+      availability?: components["schemas"]["CatalogAvailability"];
       /** @description Whether backdrop_url is an episode still. False for series artwork; absent when provenance is unavailable. */
       backdrop_is_episode_still?: boolean;
       backdrop_thumbhash?: string;
@@ -36862,7 +37007,10 @@ export interface components {
       content_id: string;
       /** @example R */
       content_rating?: string;
-      /** Format: double */
+      /**
+       * Format: double
+       * @description The length position_seconds is measured against, in seconds, as the progress record holds it. Present with position_seconds; a card draws its progress bar and time left from the pair
+       */
       duration_seconds?: number;
       /** Format: int64 */
       episode_number?: number;
@@ -36908,7 +37056,7 @@ export interface components {
       play_content_id?: string;
       /**
        * Format: double
-       * @description Resume position on a continue-watching card
+       * @description The profile's resume position, in seconds. On a Continue Watching card, and on a catalog browse or box set card for a title the profile has started and not finished (absent while user_state.played is true); other listings leave it absent. Series, seasons, and ebooks never carry it on a browse card
        */
       position_seconds?: number;
       /** @description Whether poster_url is an episode still. False for series or season artwork; absent when provenance is unavailable. */
@@ -37071,6 +37219,15 @@ export interface components {
        * @enum {string}
        */
       advisory_source?: "commonsense" | "mdblist";
+      /**
+       * @description On an audiobook or ebook card in a catalog browse listing: up to three author names in credit order, the names the book's detail page lists under authors. Absent for other types, on other listings, and when the book credits no author
+       * @example [
+       *       "Frank Herbert"
+       *     ]
+       */
+      authors?: string[];
+      /** @description On a series, complete seasons out of seasons that have aired. On a season, episodes in the library out of the episodes the season lists. Sent only while the acting profile's poster badges are on and include the availability badge. Absent for other types, for specials, and when episode metadata is incomplete. */
+      availability?: components["schemas"]["CatalogAvailability"];
       /** @description Whether backdrop_url is an episode still. False for series artwork; absent when provenance is unavailable. */
       backdrop_is_episode_still?: boolean;
       backdrop_thumbhash?: string;
@@ -37088,7 +37245,10 @@ export interface components {
       content_id: string;
       /** @example R */
       content_rating?: string;
-      /** Format: double */
+      /**
+       * Format: double
+       * @description The length position_seconds is measured against, in seconds, as the progress record holds it. Present with position_seconds; a card draws its progress bar and time left from the pair
+       */
       duration_seconds?: number;
       /** Format: int64 */
       episode_number?: number;
@@ -37134,7 +37294,7 @@ export interface components {
       play_content_id?: string;
       /**
        * Format: double
-       * @description Resume position on a continue-watching card
+       * @description The profile's resume position, in seconds. On a Continue Watching card, and on a catalog browse or box set card for a title the profile has started and not finished (absent while user_state.played is true); other listings leave it absent. Series, seasons, and ebooks never carry it on a browse card
        */
       position_seconds?: number;
       /** @description Whether poster_url is an episode still. False for series or season artwork; absent when provenance is unavailable. */
@@ -68068,6 +68228,124 @@ export interface operations {
       };
       /** @description Not Acceptable */
       406: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          "application/problem+json": components["schemas"]["Problem"];
+        };
+      };
+      /** @description Unprocessable Entity */
+      422: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          "application/problem+json": components["schemas"]["Problem"];
+        };
+      };
+      /** @description Too Many Requests */
+      429: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          "application/problem+json": components["schemas"]["Problem"];
+        };
+      };
+      /** @description Internal Server Error */
+      500: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          "application/problem+json": components["schemas"]["Problem"];
+        };
+      };
+      /** @description Service Unavailable */
+      503: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          "application/problem+json": components["schemas"]["Problem"];
+        };
+      };
+    };
+  };
+  issueAdminNodeKey: {
+    parameters: {
+      query?: never;
+      header?: {
+        /** @description Optional. When present, it must name the authenticated account's primary profile; an absent header is accepted. */
+        "X-Profile-Id"?: string;
+        /** @description Verification proof for a PIN-locked profile, issued by POST /api/v2/profiles/{id}/verify-pin; required only when the declared profile is locked */
+        "X-Profile-Token"?: string;
+      };
+      path: {
+        id: string;
+      };
+      cookie?: never;
+    };
+    requestBody?: never;
+    responses: {
+      /** @description Created */
+      201: {
+        headers: {
+          "Cache-Control"?: string;
+          [name: string]: unknown;
+        };
+        content: {
+          "application/json": components["schemas"]["AdminNodeKey"];
+        };
+      };
+      /** @description Bad Request */
+      400: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          "application/problem+json": components["schemas"]["Problem"];
+        };
+      };
+      /** @description Unauthorized */
+      401: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          "application/problem+json": components["schemas"]["Problem"];
+        };
+      };
+      /** @description Forbidden */
+      403: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          "application/problem+json": components["schemas"]["Problem"];
+        };
+      };
+      /** @description Not Found */
+      404: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          "application/problem+json": components["schemas"]["Problem"];
+        };
+      };
+      /** @description Not Acceptable */
+      406: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          "application/problem+json": components["schemas"]["Problem"];
+        };
+      };
+      /** @description Conflict */
+      409: {
         headers: {
           [name: string]: unknown;
         };

@@ -6,6 +6,8 @@ const mocks = vi.hoisted(() => ({
   update: vi.fn(),
   updateAsync: vi.fn(),
   refresh: vi.fn(),
+  imageWritePending: false,
+  resetPending: false,
 }));
 
 vi.mock("@/hooks/queries/items", () => ({
@@ -15,6 +17,9 @@ vi.mock("@/hooks/queries/items", () => ({
     isPending: false,
   }),
   useRefreshItemMetadata: () => ({ mutate: mocks.refresh }),
+  useItemMetadataSavePending: () => false,
+  useItemImageWritePending: () => mocks.imageWritePending,
+  useItemMetadataResetPending: () => mocks.resetPending,
 }));
 vi.mock("@/hooks/useIsActingAdmin", () => ({ useIsActingAdmin: () => true }));
 vi.mock("@/components/MetadataTranslatePanel", () => ({ MetadataTranslatePanel: () => null }));
@@ -30,22 +35,13 @@ vi.mock("@/components/ConfirmDialog", () => ({
   }) => (open ? <button onClick={onConfirm}>{confirmLabel}</button> : null),
 }));
 vi.mock("@/components/ImageSelectorTab", () => ({
-  default: ({
-    onImageApplied,
-    onApplyPendingChange,
-  }: {
-    onImageApplied?: () => void;
-    onApplyPendingChange?: (pending: boolean) => void;
-  }) => (
-    <>
-      <button onClick={onImageApplied}>Apply image</button>
-      <button onClick={() => onApplyPendingChange?.(true)}>Begin image apply</button>
-      <button onClick={() => onApplyPendingChange?.(false)}>Finish image apply</button>
-    </>
+  default: ({ onImageApplied }: { onImageApplied?: () => void }) => (
+    <button onClick={onImageApplied}>Apply image</button>
   ),
 }));
 
 import EditMetadataDialog from "./EditMetadataDialog";
+import { FIELD_OVERVIEW } from "./EditMetadataDialog.form";
 
 function series(lockedFields: number[] = []): ItemDetail {
   return {
@@ -60,6 +56,8 @@ describe("EditMetadataDialog image locks", () => {
   beforeEach(() => {
     mocks.update.mockReset();
     mocks.refresh.mockReset();
+    mocks.imageWritePending = false;
+    mocks.resetPending = false;
   });
 
   it("keeps a newly fetched image lock when other metadata is saved", () => {
@@ -89,13 +87,25 @@ describe("EditMetadataDialog image locks", () => {
     expect(mocks.update).toHaveBeenCalledWith({ locked_fields: [10] }, expect.any(Object));
   });
 
-  it("waits for an image apply to finish before saving metadata", () => {
-    render(<EditMetadataDialog item={series()} open onOpenChange={vi.fn()} />);
-    fireEvent.click(screen.getByRole("button", { name: "Begin image apply" }));
+  // A save or reset started while an image apply, an upload, or a reset is
+  // still running could leave the item's locks wrong, including when the
+  // write was started from an earlier opening of the dialog (#4243).
+  it.each([
+    ["an image apply or upload", "imageWritePending"],
+    ["a Reset to Provider", "resetPending"],
+  ] as const)("waits for %s for the item to finish", (_name, pending) => {
+    const onOpenChange = vi.fn();
+    mocks[pending] = true;
+    const { rerender } = render(
+      <EditMetadataDialog item={series()} open onOpenChange={onOpenChange} />,
+    );
     expect(screen.getByRole("button", { name: "Save Changes" })).toBeDisabled();
+    expect(screen.getByRole("button", { name: "Reset to Provider" })).toBeDisabled();
 
-    fireEvent.click(screen.getByRole("button", { name: "Finish image apply" }));
+    mocks[pending] = false;
+    rerender(<EditMetadataDialog item={series()} open onOpenChange={onOpenChange} />);
     expect(screen.getByRole("button", { name: "Save Changes" })).toBeEnabled();
+    expect(screen.getByRole("button", { name: "Reset to Provider" })).toBeEnabled();
   });
 });
 
@@ -299,6 +309,129 @@ describe("EditMetadataDialog audiobooks", () => {
 
     expect(mocks.update).toHaveBeenCalledWith(
       { title: "Edited Book", year: 2001, locked_fields: [0, 13] },
+      expect.any(Object),
+    );
+  });
+});
+
+describe("EditMetadataDialog item change", () => {
+  // The movie page keeps the closed dialog mounted while a "More Like This"
+  // link opens another movie, then opens the dialog for that one (#4212).
+  it("shows the item it is opened for after the page moves to another", () => {
+    const movie = (id: string, title: string) =>
+      ({ content_id: id, type: "movie", title, locked_fields: [] }) as unknown as ItemDetail;
+    const onOpenChange = vi.fn();
+    const { rerender } = render(
+      <EditMetadataDialog item={movie("first", "First Movie")} open onOpenChange={onOpenChange} />,
+    );
+    rerender(
+      <EditMetadataDialog
+        item={movie("first", "First Movie")}
+        open={false}
+        onOpenChange={onOpenChange}
+      />,
+    );
+    rerender(
+      <EditMetadataDialog
+        item={movie("second", "Second Movie")}
+        open={false}
+        onOpenChange={onOpenChange}
+      />,
+    );
+    rerender(
+      <EditMetadataDialog
+        item={movie("second", "Second Movie")}
+        open
+        onOpenChange={onOpenChange}
+      />,
+    );
+
+    expect(screen.getByDisplayValue("Second Movie")).toBeTruthy();
+    expect(screen.queryByDisplayValue("First Movie")).toBeNull();
+  });
+});
+
+describe("EditMetadataDialog reopening", () => {
+  beforeEach(() => {
+    mocks.update.mockReset();
+    mocks.refresh.mockReset();
+  });
+
+  const movie = (title: string) =>
+    ({
+      content_id: "movie-test",
+      type: "movie",
+      title,
+      locked_fields: [],
+    }) as unknown as ItemDetail;
+
+  // The item page keeps the closed dialog mounted, so a reopening must start
+  // from the item as it is now (#4235).
+  it("drops edits that were closed without saving", () => {
+    const onOpenChange = vi.fn();
+    const { rerender } = render(
+      <EditMetadataDialog item={movie("Kept Title")} open onOpenChange={onOpenChange} />,
+    );
+    fireEvent.change(screen.getByDisplayValue("Kept Title"), {
+      target: { value: "Abandoned Title" },
+    });
+    rerender(
+      <EditMetadataDialog item={movie("Kept Title")} open={false} onOpenChange={onOpenChange} />,
+    );
+    rerender(<EditMetadataDialog item={movie("Kept Title")} open onOpenChange={onOpenChange} />);
+
+    expect(screen.getByDisplayValue("Kept Title")).toBeTruthy();
+    fireEvent.click(screen.getByRole("button", { name: "Save Changes" }));
+    expect(mocks.update).not.toHaveBeenCalled();
+  });
+
+  it("shows the provider's values after Reset to Provider, and saving them sends nothing", () => {
+    const onOpenChange = vi.fn();
+    const { rerender } = render(
+      <EditMetadataDialog item={movie("Edited Title")} open onOpenChange={onOpenChange} />,
+    );
+    // Reset closes the dialog, and the item refetches with the provider's title.
+    rerender(
+      <EditMetadataDialog item={movie("Edited Title")} open={false} onOpenChange={onOpenChange} />,
+    );
+    rerender(
+      <EditMetadataDialog
+        item={movie("Provider Title")}
+        open={false}
+        onOpenChange={onOpenChange}
+      />,
+    );
+    rerender(
+      <EditMetadataDialog item={movie("Provider Title")} open onOpenChange={onOpenChange} />,
+    );
+
+    expect(screen.getByDisplayValue("Provider Title")).toBeTruthy();
+    fireEvent.click(screen.getByRole("button", { name: "Save Changes" }));
+    expect(mocks.update).not.toHaveBeenCalled();
+  });
+
+  // Reopened before a save's or a reset's refetch lands, the dialog starts
+  // from the old values; the refetch must replace them, not be saved over.
+  it("shows a refetch that lands while it is open, and saving it sends only the edits", () => {
+    const onOpenChange = vi.fn();
+    const { rerender } = render(
+      <EditMetadataDialog item={movie("Old Title")} open onOpenChange={onOpenChange} />,
+    );
+    rerender(
+      <EditMetadataDialog
+        item={{ ...movie("New Title"), overview: "Old overview" }}
+        open
+        onOpenChange={onOpenChange}
+      />,
+    );
+    expect(screen.getByDisplayValue("New Title")).toBeTruthy();
+
+    fireEvent.change(screen.getByDisplayValue("Old overview"), {
+      target: { value: "Edited overview" },
+    });
+    fireEvent.click(screen.getByRole("button", { name: "Save Changes" }));
+    expect(mocks.update).toHaveBeenCalledWith(
+      { overview: "Edited overview", locked_fields: [FIELD_OVERVIEW] },
       expect.any(Object),
     );
   });
